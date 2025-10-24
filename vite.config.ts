@@ -4,8 +4,10 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, '.', '');
+    const isProduction = mode === 'production';
+    
     return {
-      base: '/Premium-Mod/', // ตั้งค่า base path สำหรับ GitHub Pages
+      base: isProduction ? '/Premium-Mod/' : '/', // ใช้ base path เฉพาะ production
       server: {
         port: 3000,
         host: '0.0.0.0',
