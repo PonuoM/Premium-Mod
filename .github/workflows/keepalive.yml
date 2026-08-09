@@ -1,0 +1,62 @@
+name: Supabase Keep-Alive
+
+# Supabase Free tier จะ pause project อัตโนมัติเมื่อไม่มี activity เกิน 7 วัน
+# workflow นี้ยิง query เบา ๆ เข้า DB ทุกวัน เพื่อให้ project ไม่ถูก pause
+on:
+  schedule:
+    # ทุกวัน 03:17 UTC (10:17 น. เวลาไทย) — เลี่ยงนาทีที่ 0 เพราะ GitHub คิวแน่นแล้วรันช้า/หลุด
+    - cron: '17 3 * * *'
+  workflow_dispatch: # กดรันเองได้จากแท็บ Actions
+
+permissions:
+  contents: write # ใช้สำหรับ empty commit กัน workflow ถูกปิด (ดู step สุดท้าย)
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase REST API
+        env:
+          # publishable key เป็น public key อยู่แล้ว (ถูกป้องกันด้วย RLS + ออกแบบมาให้ฝังใน browser)
+          # ถ้าอยากเก็บเป็นความลับ ไปตั้งที่ Settings > Secrets and variables > Actions
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://orqyxamgukajopqdxpdg.supabase.co' }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || 'sb_publishable_WkmmmZZdCWimzdR-EBkT_Q_c_pZ8cmh' }}
+        run: |
+          set -euo pipefail
+
+          # ยิงเข้าตารางจริงเพื่อให้แตะ Postgres (ยิงแค่ /rest/v1/ เฉย ๆ อาจไม่นับเป็น DB activity)
+          STATUS=$(curl -sS -o /tmp/resp.txt -w '%{http_code}' \
+            --max-time 30 --retry 3 --retry-delay 10 --retry-connrefused \
+            "${SUPABASE_URL}/rest/v1/skus?select=id&limit=1" \
+            -H "apikey: ${SUPABASE_ANON_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_ANON_KEY}")
+
+          echo "HTTP $STATUS"
+          echo "Response: $(cat /tmp/resp.txt)"
+
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Supabase ping failed (HTTP $STATUS) — project อาจถูก pause หรือ schema เปลี่ยน"
+            exit 1
+          fi
+          echo "::notice::Supabase alive ✅"
+
+      # GitHub จะปิด scheduled workflow อัตโนมัติถ้า repo ไม่มี commit เกิน 60 วัน
+      # ซึ่งจะทำให้ keep-alive ตายเงียบ ๆ → สร้าง empty commit เมื่อใกล้ครบกำหนด
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Keep scheduled workflow enabled
+        run: |
+          set -euo pipefail
+          LAST=$(git log -1 --format=%ct)
+          DAYS=$(( ( $(date +%s) - LAST ) / 86400 ))
+          echo "commit ล่าสุดเมื่อ ${DAYS} วันที่แล้ว"
+
+          if [ "$DAYS" -ge 45 ]; then
+            git config user.name  'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit --allow-empty -m "chore: keepalive commit (repo inactive ${DAYS}d)"
+            git push
+            echo "::notice::push empty commit แล้ว — รีเซ็ตตัวนับ 60 วันของ GitHub"
+          fi
