@@ -1,28 +1,35 @@
 -- 003_enable_rls.sql
--- ปิดรูโหว่: ตอนนี้ทุกตารางยังไม่ได้เปิด RLS
+-- ปิดรูโหว่: ทุกตารางยังไม่ได้เปิด RLS
 --
 -- Supabase ให้ browser ยิงเข้า database ตรง ๆ ไม่มี backend คั่นกลาง
 -- ตัวเดียวที่กั้นระหว่างคนนอกกับข้อมูลคือ RLS — ซึ่งยังปิดอยู่
 -- publishable key ฝังอยู่ในไฟล์ JS บน GitHub Pages ใครกด F12 ก็ copy ไปได้
--- แล้วยิง DELETE ลบข้อมูลทั้งตารางได้ทันที (ยืนยันแล้วด้วยการ probe:
--- insert เปล่า ๆ ได้ error 23502 not-null ไม่ใช่ 42501 RLS = ทะลุ RLS เข้าไปถึงชั้น constraint)
 --
--- หลังรันไฟล์นี้: คนทั่วไป "อ่านอย่างเดียว", แก้ไขได้เฉพาะคนที่ล็อกอินแล้ว
+-- หลังรันไฟล์นี้: คนทั่วไปอ่านอย่างเดียว, แก้ไขได้เฉพาะคนที่ล็อกอินแล้ว
 --
--- ⚠️⚠️ ต้องรันไฟล์นี้ "หลัง" deploy เว็บเวอร์ชันที่มีหน้า login แล้วเท่านั้น
---       ถ้ารันก่อน หน้า Admin จะใช้งานไม่ได้ทันที (อัปโหลด/แก้/ลบ อะไรไม่ได้เลย)
---       เพราะมันยังยิงด้วย key ของผู้ใช้ทั่วไปอยู่
+-- ⚠️ ต้องรันหลัง deploy เว็บที่มีหน้า login แล้วเท่านั้น ไม่งั้นหน้า Admin จะแก้อะไรไม่ได้
+-- ⚠️ ต้องปิด public signup ด้วย (Authentication > Sign In / Providers)
+--    ไม่งั้นใครก็สมัครเองแล้วได้ role authenticated = เขียนได้
 --
--- ⚠️ ต้องปิด public signup ด้วย ไม่งั้นใครก็สมัครเองแล้วกลายเป็น authenticated ได้
---    Dashboard > Authentication > Sign In / Providers > ปิด "Allow new users to sign up"
-
-begin;
+-- ────────────────────────────────────────────────────────────
+-- บทเรียนจากการรันจริง — ทำไมข้อ 2 ถึงสำคัญที่สุดในไฟล์นี้
+--
+-- รอบแรกไฟล์นี้ทำแค่ enable RLS + สร้าง policy ของตัวเอง ผลคือ SQL Editor
+-- ขึ้น Success และ pg_tables ก็รายงาน rowsecurity = true ครบทุกตาราง
+-- แต่ยิง INSERT จากภายนอกด้วย publishable key กลับได้ HTTP 201 — สร้างแถวได้จริง
+--
+-- สาเหตุ: ฐานข้อมูลนี้มี policy ค้างอยู่ 39 ตัว (จากที่ควรมี 10) สะสมจากการ
+-- กดสร้างผ่านหน้า Dashboard หลายรอบ ในจำนวนนั้นมีตัวที่อนุญาตให้ anon เขียนได้
+-- ตลอดเวลาที่ผ่านมามันไม่มีผลเพราะ RLS ปิดอยู่ — policy ถูกนิยามไว้เฉย ๆ ไม่ทำงาน
+-- พอเปิด RLS ปุ๊บ มันตื่นขึ้นมาทำงานทันที
+--
+-- ∴ rowsecurity = true อย่างเดียวเชื่อไม่ได้ ต้องกวาด policy ที่ไม่ได้ตั้งใจออกด้วย
+--   และต้องยืนยันด้วยการยิงจริงจากภายนอกเสมอ ไม่ใช่ดูแค่ค่าใน catalog
+-- ────────────────────────────────────────────────────────────
 
 -- ============================================================
--- เปิด RLS ทุกตาราง
+-- 1. เปิด RLS
 -- ============================================================
--- หมายเหตุ: พอเปิดแล้วยังไม่มี policy = ปฏิเสธทุกอย่าง (deny by default)
--- policy ด้านล่างจึงต้องอยู่ใน transaction เดียวกัน ไม่งั้นเว็บจะดับระหว่างทาง
 
 alter table public.skus             enable row level security;
 alter table public.part_groups      enable row level security;
@@ -31,92 +38,86 @@ alter table public.assets           enable row level security;
 alter table public.profile_settings enable row level security;
 
 -- ============================================================
--- Policy ของตารางในสคีมา public
+-- 2. กวาด policy ที่ไม่ได้ตั้งใจให้มีออกให้หมด
 -- ============================================================
--- รูปแบบเดียวกันทุกตาราง: ใครก็อ่านได้ (เว็บเป็น catalog สาธารณะ)
--- แต่ insert/update/delete ต้องล็อกอินก่อน
-
-do $$
-declare
-  t text;
-begin
-  foreach t in array array['skus','part_groups','subcategories','assets','profile_settings']
-  loop
-    -- ลบ policy ชื่อเดียวกันของรอบก่อน เพื่อให้ไฟล์นี้รันซ้ำได้
-    execute format('drop policy if exists "public_read" on public.%I', t);
-    execute format('drop policy if exists "authenticated_write" on public.%I', t);
-
-    execute format($p$
-      create policy "public_read" on public.%I
-        for select
-        to anon, authenticated
-        using (true)
-    $p$, t);
-
-    execute format($p$
-      create policy "authenticated_write" on public.%I
-        for all
-        to authenticated
-        using (true)
-        with check (true)
-    $p$, t);
-  end loop;
-end $$;
-
-commit;
-
--- ============================================================
--- Policy ของ Storage (bucket: watch-assets)
--- ============================================================
--- storage.objects เปิด RLS มาตั้งแต่ต้นอยู่แล้ว แต่ตอนนี้ต้องมี policy
--- ที่อนุญาตให้ anon เขียนได้ค้างอยู่ (เพราะหน้า Admin อัปโหลดได้โดยไม่ต้องล็อกอิน)
--- จึงต้องกวาดของเดิมที่เกี่ยวกับ bucket นี้ทิ้งก่อน แล้วสร้างชุดใหม่
+-- ลบทุกตัวที่ไม่ใช่ 2 ชื่อที่ไฟล์นี้เป็นคนสร้าง เพราะเราถือว่าไฟล์นี้เป็น
+-- แหล่งความจริงเดียวของสิทธิ์เข้าถึง — ตัวไหนไม่ได้อยู่ในนี้คือไม่ควรมี
+-- (drop policy ลบแค่กฎ ไม่แตะข้อมูลสักแถว)
 
 do $$
 declare
   p record;
 begin
   for p in
-    select policyname
-    from pg_policies
-    where schemaname = 'storage'
-      and tablename  = 'objects'
-      and (coalesce(qual, '') like '%watch-assets%'
-        or coalesce(with_check, '') like '%watch-assets%')
+    select tablename, policyname from pg_policies
+    where schemaname = 'public'
+      and tablename in ('skus','part_groups','subcategories','assets','profile_settings')
+      and policyname not in ('public_read','authenticated_write')
   loop
-    execute format('drop policy %I on storage.objects', p.policyname);
-    raise notice 'ลบ policy เดิม: %', p.policyname;
+    execute format('drop policy %I on public.%I', p.policyname, p.tablename);
+    raise notice 'ลบ policy ที่ไม่ได้ตั้งใจ: % บน %', p.policyname, p.tablename;
   end loop;
 end $$;
 
--- อ่านรูปได้ทุกคน (bucket เป็น public อยู่แล้ว หน้าเว็บโหลดรูปผ่าน public URL)
-create policy "watch_assets_public_read" on storage.objects
-  for select to anon, authenticated
-  using (bucket_id = 'watch-assets');
+-- ============================================================
+-- 3. Policy ของตาราง — อ่านได้ทุกคน เขียนต้องล็อกอิน
+-- ============================================================
 
--- อัปโหลด / แก้ไข / ลบ ต้องล็อกอินก่อน
-create policy "watch_assets_auth_insert" on storage.objects
-  for insert to authenticated
-  with check (bucket_id = 'watch-assets');
+drop policy if exists "public_read"         on public.skus;
+drop policy if exists "authenticated_write" on public.skus;
+create policy "public_read"         on public.skus for select to anon, authenticated using (true);
+create policy "authenticated_write" on public.skus for all    to authenticated       using (true) with check (true);
 
-create policy "watch_assets_auth_update" on storage.objects
-  for update to authenticated
-  using (bucket_id = 'watch-assets')
-  with check (bucket_id = 'watch-assets');
+drop policy if exists "public_read"         on public.part_groups;
+drop policy if exists "authenticated_write" on public.part_groups;
+create policy "public_read"         on public.part_groups for select to anon, authenticated using (true);
+create policy "authenticated_write" on public.part_groups for all    to authenticated       using (true) with check (true);
 
-create policy "watch_assets_auth_delete" on storage.objects
-  for delete to authenticated
-  using (bucket_id = 'watch-assets');
+drop policy if exists "public_read"         on public.subcategories;
+drop policy if exists "authenticated_write" on public.subcategories;
+create policy "public_read"         on public.subcategories for select to anon, authenticated using (true);
+create policy "authenticated_write" on public.subcategories for all    to authenticated       using (true) with check (true);
+
+drop policy if exists "public_read"         on public.assets;
+drop policy if exists "authenticated_write" on public.assets;
+create policy "public_read"         on public.assets for select to anon, authenticated using (true);
+create policy "authenticated_write" on public.assets for all    to authenticated       using (true) with check (true);
+
+drop policy if exists "public_read"         on public.profile_settings;
+drop policy if exists "authenticated_write" on public.profile_settings;
+create policy "public_read"         on public.profile_settings for select to anon, authenticated using (true);
+create policy "authenticated_write" on public.profile_settings for all    to authenticated       using (true) with check (true);
 
 -- ============================================================
--- ตรวจผลหลังรัน
+-- 4. Storage (bucket: watch-assets) — ไม่ต้องทำอะไร
 -- ============================================================
--- 1) ทุกตารางต้องขึ้น rowsecurity = true
---    select tablename, rowsecurity from pg_tables
---    where schemaname='public' and tablename in
---      ('skus','part_groups','subcategories','assets','profile_settings');
+-- storage.objects เปิด RLS มาตั้งแต่ต้นและมี policy ที่ถูกต้องอยู่แล้ว
+-- ยืนยันด้วยการยิงจริง: อัปโหลดด้วย publishable key ได้ 403
+-- "new row violates row-level security policy" ตั้งแต่ก่อนแตะไฟล์นี้
 --
--- 2) ทดสอบจาก terminal ว่าคนนอกเขียนไม่ได้แล้ว — ต้องได้ 401/403 code 42501
---    (ถ้ายังได้ 23502 หรือ 204 แปลว่า RLS ยังไม่มีผล)
---    curl -X DELETE "https://<ref>.supabase.co/rest/v1/skus?id=eq.__nope__" \
---         -H "apikey: <publishable key>"
+-- ร่างแรกของไฟล์นี้เคยมีท่อน drop/create policy บน storage.objects ด้วย
+-- ตัดออกแล้วเพราะ (ก) ไม่จำเป็น ของเดิมถูกอยู่แล้ว (ข) ตารางนั้นเจ้าของคือ
+-- supabase_storage_admin ถ้าสิทธิ์ไม่พอจะพังแล้วลากทั้งไฟล์ rollback ไปด้วย
+
+-- ============================================================
+-- 5. ตรวจผล — ต้องได้ 10 แถวพอดี (5 ตาราง x 2 policy)
+-- ============================================================
+
+select
+  t.tablename,
+  t.rowsecurity as rls_enabled,
+  p.policyname,
+  p.roles::text as roles,
+  p.cmd
+from pg_tables t
+left join pg_policies p
+  on p.schemaname = t.schemaname and p.tablename = t.tablename
+where t.schemaname = 'public'
+  and t.tablename in ('skus','part_groups','subcategories','assets','profile_settings')
+order by t.tablename, p.policyname;
+
+-- ตรวจซ้ำจากภายนอกด้วย ไม่ใช่ดูแค่ผลข้างบน:
+--   curl -X POST "https://<ref>.supabase.co/rest/v1/skus" \
+--        -H "apikey: <publishable key>" -H "Content-Type: application/json" \
+--        -d '{"id":"__rls_probe__","name":"probe"}'
+--   ต้องได้ 401 code 42501 — ถ้าได้ 201 แปลว่ายังโหว่อยู่
