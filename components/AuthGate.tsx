@@ -9,6 +9,21 @@ interface AuthGateProps {
 }
 
 /**
+ * Supabase Auth บังคับให้ identifier เป็นรูปแบบอีเมล พิมพ์ "admin" เฉย ๆ ไม่ผ่าน
+ * แต่แอดมินร้านคุ้นกับการพิมพ์ชื่อผู้ใช้สั้น ๆ มากกว่า จึงเติมโดเมนนี้ให้อัตโนมัติ
+ * เมื่อกรอกมาโดยไม่มี "@" — ใครกรอกอีเมลเต็มมาก็ยังใช้ได้ตามปกติ
+ *
+ * ใช้ .local ซึ่งเป็นโดเมนสงวน ส่งเมลไปไม่ถึงใครแน่นอน จึงไม่มีทางหลุดไปหาคนอื่น
+ * ผลที่ตามมา: รีเซ็ตรหัสผ่านทางอีเมลไม่ได้ ต้องตั้งใหม่จาก Supabase Dashboard
+ */
+const USERNAME_DOMAIN = 'premium-mod.local';
+
+const toEmail = (input: string): string => {
+  const value = input.trim();
+  return value.includes('@') ? value : `${value}@${USERNAME_DOMAIN}`;
+};
+
+/**
  * ล็อกหน้า Admin ไว้หลัง Supabase Auth
  *
  * ก่อนหน้านี้หน้า Admin เปิดให้ใครก็เข้าได้ แค่กดปุ่ม "Admin" มุมขวาบน
@@ -58,7 +73,7 @@ const AuthGate: React.FC<AuthGateProps> = ({ children, onCancel }) => {
 
     try {
       const { error: signInError } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
+        email: toEmail(email),
         password,
       });
       if (signInError) throw signInError;
@@ -102,13 +117,15 @@ const AuthGate: React.FC<AuthGateProps> = ({ children, onCancel }) => {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label htmlFor="admin-email" className="block text-sm font-medium text-gray-700 mb-1">อีเมล</label>
+            <label htmlFor="admin-email" className="block text-sm font-medium text-gray-700 mb-1">ชื่อผู้ใช้</label>
             <input
               id="admin-email"
-              type="email"
+              // type="text" ไม่ใช่ "email": เบราว์เซอร์จะได้ไม่เด้ง "โปรดใส่ @" ตอนพิมพ์ชื่อผู้ใช้สั้น ๆ
+              type="text"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
+              placeholder="admin"
               autoComplete="username"
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C4A383] focus:border-transparent"
             />
