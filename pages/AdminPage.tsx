@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import AuthGate from '../components/AuthGate';
 import AdminSidebar from '../components/admin/AdminSidebar';
 import SkuManager from '../components/admin/SkuManager';
 import PartGroupManager from '../components/admin/PartGroupManager';
@@ -30,12 +31,14 @@ const AdminPage: React.FC<AdminPageProps> = ({ onNavigate }) => {
   }
 
   return (
-    <div className="flex min-h-screen bg-[#F8F9FA]">
-      <AdminSidebar activeView={activeView} setActiveView={setActiveView} />
-      <main className="flex-1 p-8">
-        {renderContent()}
-      </main>
-    </div>
+    <AuthGate onCancel={() => onNavigate('configurator')}>
+      <div className="flex min-h-screen bg-[#F8F9FA]">
+        <AdminSidebar activeView={activeView} setActiveView={setActiveView} />
+        <main className="flex-1 p-8">
+          {renderContent()}
+        </main>
+      </div>
+    </AuthGate>
   );
 };
 

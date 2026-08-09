@@ -4,6 +4,8 @@ import WatchIcon from '../icons/WatchIcon';
 import DiamondIcon from '../icons/DiamondIcon';
 import CategoryIcon from '../icons/CategoryIcon';
 import SettingsIcon from '../icons/SettingsIcon';
+import UserIcon from '../icons/UserIcon';
+import { supabase } from '../../lib/supabase';
 
 interface AdminSidebarProps {
     activeView: AdminView;
@@ -45,6 +47,14 @@ const AdminSidebar: React.FC<AdminSidebarProps> = ({ activeView, setActiveView }
           );
         })}
       </nav>
+
+      <button
+        onClick={() => supabase.auth.signOut()}
+        className="mt-auto flex items-center space-x-3 px-4 py-2.5 rounded-lg text-gray-600 hover:bg-gray-50 text-left w-full"
+      >
+        <UserIcon className="h-5 w-5" />
+        <span className="text-sm">ออกจากระบบ</span>
+      </button>
     </aside>
   );
 };

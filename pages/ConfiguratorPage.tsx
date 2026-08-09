@@ -4,9 +4,25 @@ import Header from '../components/Header';
 import PartSelector from '../components/PartSelector';
 import WatchPreview from '../components/WatchPreview';
 import { ViewAsset, Sku, PartGroup, ProfileSettings } from '../types';
-import { supabase } from '../lib/supabase';
+import { supabase, PROFILE_SETTINGS_ID } from '../lib/supabase';
 
 const STORAGE_KEY = 'watch_config_profile_settings';
+
+/**
+ * แปลง error จาก supabase-js ให้เป็นข้อความที่ผู้ใช้อ่านรู้เรื่อง
+ *
+ * เคสที่เจอจริง: project ถูก pause เพราะ Free tier ทิ้งไว้เกิน 7 วัน → DNS ของ
+ * <ref>.supabase.co หายไป → fetch พังตั้งแต่ก่อนยิง HTTP จึงไม่มี status code ให้จับ
+ * supabase-js เลยส่ง message ดิบมาเป็น "TypeError: Failed to fetch" แล้วหน้าเว็บ
+ * เอาไปโชว์เต็มจอ ซึ่งผู้ใช้ทั่วไปตีความไม่ได้เลยว่าต้องทำอะไรต่อ
+ */
+const toFriendlyError = (err: any): string => {
+  const raw = err?.message || '';
+  if (raw.includes('Failed to fetch') || raw.includes('NetworkError') || raw.includes('fetch failed')) {
+    return 'เชื่อมต่อฐานข้อมูลไม่ได้ กรุณาตรวจสอบอินเทอร์เน็ตแล้วรีเฟรชหน้าอีกครั้ง';
+  }
+  return raw || 'โหลดข้อมูลไม่สำเร็จ';
+};
 const DEFAULT_SETTINGS: ProfileSettings = {
   storeName: 'Watch Configurator',
   watermarkType: 'image',
@@ -48,10 +64,10 @@ const ConfiguratorPage = forwardRef<ConfiguratorPageRef, ConfiguratorPageProps>(
       const { data, error } = await supabase
         .from('profile_settings')
         .select('*')
-        .limit(1)
-        .single();
+        .eq('id', PROFILE_SETTINGS_ID)
+        .maybeSingle();
 
-      if (error && error.code !== 'PGRST116') { // PGRST116 = no rows returned
+      if (error) {
         console.error('Error fetching profile settings:', error);
         setProfileSettings(DEFAULT_SETTINGS);
         return;
@@ -114,7 +130,7 @@ const ConfiguratorPage = forwardRef<ConfiguratorPageRef, ConfiguratorPageProps>(
       }
     } catch (err: any) {
       console.error(err);
-      setError(err.message || 'Failed to fetch initial data.');
+      setError(toFriendlyError(err));
       setLoading(false);
     }
   }, []);
@@ -161,7 +177,7 @@ const ConfiguratorPage = forwardRef<ConfiguratorPageRef, ConfiguratorPageProps>(
 
       } catch (err: any) {
         console.error(err);
-        setError(err.message || `Failed to fetch assets for SKU: ${selectedSkuId}`);
+        setError(toFriendlyError(err));
         setAssets([]);
         setSelectedAssets({});
       } finally {

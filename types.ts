@@ -16,8 +16,10 @@ export interface PartGroup {
 export interface Subcategory {
   id: string; // uuid
   sku_id: string;
+  group_key: string;
   name: string;
   sort_order: number;
+  image_url: string | null;
   created_at: string;
 }
 

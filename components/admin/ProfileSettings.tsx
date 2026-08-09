@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { ProfileSettings, WatermarkPosition, WatermarkType } from '../../types';
-import { supabase } from '../../lib/supabase';
+import { supabase, PROFILE_SETTINGS_ID } from '../../lib/supabase';
 import UploadIcon from '../icons/UploadIcon';
 
 const DEFAULT_SETTINGS: ProfileSettings = {
@@ -33,13 +33,15 @@ const ProfileSettingsComponent: React.FC<ProfileSettingsComponentProps> = ({ onN
         throw new Error('Supabase is not configured.');
       }
 
+      // อ้างอิงด้วย id คงที่ + maybeSingle: เดิมใช้ .limit(1).single() ซึ่งหยิบแถวไหนก็ได้
+      // จากตารางที่บวมเป็น 15 แถว ทำให้ค่าที่โชว์ไม่ตรงกับที่เพิ่งเซฟไป
       const { data, error } = await supabase
         .from('profile_settings')
         .select('*')
-        .limit(1)
-        .single();
+        .eq('id', PROFILE_SETTINGS_ID)
+        .maybeSingle();
 
-      if (error && error.code !== 'PGRST116') { // PGRST116 = no rows returned
+      if (error) {
         throw error;
       }
 
@@ -108,21 +110,14 @@ const ProfileSettingsComponent: React.FC<ProfileSettingsComponentProps> = ({ onN
         updated_at: new Date().toISOString(),
       };
 
-      // Try to update existing record first
-      const { error: updateError } = await supabase
+      // upsert บน id คงที่ — เดิมใช้ .update().limit(1) ที่ไม่มี .eq() แล้ว fallback ไป insert
+      // ผลคือทุกครั้งที่กดเซฟจะได้แถวใหม่ ตารางเลยบวมเป็น 15 แถวโดยไม่มีใครสังเกต
+      const { error: upsertError } = await supabase
         .from('profile_settings')
-        .update(dbData)
-        .limit(1);
+        .upsert({ id: PROFILE_SETTINGS_ID, ...dbData });
 
-      if (updateError && updateError.code !== 'PGRST116') {
-        // If no record exists, insert a new one
-        const { error: insertError } = await supabase
-          .from('profile_settings')
-          .insert([dbData]);
-
-        if (insertError) {
-          throw insertError;
-        }
+      if (upsertError) {
+        throw upsertError;
       }
 
       setSaveStatus('saved');
